@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+
+import time
+import maxlab as mx
+
+
+def create_stim_pulse(seq: mx.Sequence, amplitude_bits: int, phase_samples: int, dac: int) -> mx.Sequence:
+    # Biphasic pulse: negative → delay → positive → delay → back to 0
+    seq.append(mx.DAC(dac, 512 - amplitude_bits))
+    seq.append(mx.DelaySamples(phase_samples))
+    seq.append(mx.DAC(dac, 512 + amplitude_bits))
+    seq.append(mx.DelaySamples(phase_samples))
+    seq.append(mx.DAC(dac, 512))
+    return seq
+
+
+def main():
+    # ---------- USER PARAMETERS (edit these) ----------
+    # Example electrodes from the docs
+    electrodes = [4885, 4666, 4886, 4022, 5327, 5328, 5106, 5326, 3138, 3140, 3580, 4887]
+    stim_electrodes = [3580, 4887]
+
+    wells = [0]                     # use well 0
+    directory_name = "/tmp"         # CHANGE THIS to an existing folder on the rig
+    file_name = "maxlab_simple_test"
+
+    number_pulses_per_train = 10
+    number_pulse_trains = 3
+    amplitude_bits = 34             # ~100 mV (34 * 2.9 mV)
+    phase_samples = 4               # 4 samples * 50 µs = 200 µs/phase
+    inter_pulse_interval = 200      # 200 samples * 50 µs = 10 ms between pulses
+    inter_train_pause_s = 5.0       # seconds between trains
+    dac_channel = 0                 # use DAC 0 for all stim units
+    # --------------------------------------------------
+
+    print("Initializing system...")
+    mx.initialize()
+    resp = mx.send(mx.Core().enable_stimulation_power(True))
+    if resp != "Ok":
+        raise RuntimeError(f"enable_stimulation_power failed with response: {resp}")
+    time.sleep(2.0)
+
+    print("Configuring electrode array and routing...")
+    array = mx.Array("stimulation")
+    array.reset()
+    array.clear_selected_electrodes()
+    array.select_electrodes(electrodes)
+    array.select_stimulation_electrodes(stim_electrodes)
+    array.route()
+
+    # For MaxTwo this selects which wells are active; for MaxOne, [0] is standard.
+    mx.activate(wells)
+
+    # Connect stim electrodes to stim units and collect unit indices
+    print("Connecting stimulation electrodes to stimulation units...")
+    stimulation_units = []
+    for stim_el in stim_electrodes:
+        array.connect_electrode_to_stimulation(stim_el)
+        stim = array.query_stimulation_at_electrode(stim_el)
+        if len(stim) == 0:
+            raise RuntimeError(f"No stimulation channel can connect to electrode: {stim_el}")
+        stim_unit_int = int(stim)
+        if stim_unit_int in stimulation_units:
+            raise RuntimeError(
+                f"Two electrodes connected to the same stim unit ({stim_unit_int}). "
+                f"Select a neighboring electrode instead of {stim_el}."
+            )
+        stimulation_units.append(stim_unit_int)
+
+    print("Downloading array configuration to device...")
+    array.download(wells)
+    time.sleep(2.0)
+
+    print("Running offset compensation...")
+    mx.offset()
+    time.sleep(2.0)
+
+    print("Powering up and configuring stimulation units:", stimulation_units)
+    for stim_unit in stimulation_units:
+        stimulation = (
+            mx.StimulationUnit(stim_unit)
+            .power_up(True)
+            .connect(True)
+            .set_voltage_mode()
+            .dac_source(dac_channel)
+        )
+        mx.send(stimulation)
+
+    # Build one stimulation train sequence
+    print("Building stimulation sequence...")
+    seq = mx.Sequence()
+    for _ in range(number_pulses_per_train):
+        seq = create_stim_pulse(seq, amplitude_bits, phase_samples, dac_channel)
+        seq.append(mx.DelaySamples(inter_pulse_interval))
+
+    # Prepare recording
+    print("Setting up recording...")
+    s = mx.Saving()
+    s.open_directory(directory_name)
+    s.start_file(file_name)
+    s.group_delete_all()
+    s.group_define(0, "all_channels", list(range(1024)))  # record raw from all channels
+    s.start_recording(wells)
+
+    print("Baseline 5 seconds...")
+    time.sleep(5.0)
+
+    # Send a few trains
+    print(f"Sending {number_pulse_trains} pulse trains...")
+    for i in range(number_pulse_trains):
+        print(f"  Train {i + 1}/{number_pulse_trains}")
+        seq.send()
+        time.sleep(inter_train_pause_s)
+
+    print("Post-stim 5 seconds...")
+    time.sleep(5.0)
+
+    print("Stopping recording...")
+    s.stop_recording()
+    time.sleep(1.0)
+    s.stop_file()
+    s.group_delete_all()
+
+    print("Done. Check the recording in:", directory_name)
+
+
+if __name__ == "__main__":
+    main()
