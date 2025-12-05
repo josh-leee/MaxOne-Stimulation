@@ -15,14 +15,14 @@ def create_stim_pulse(seq: mx.Sequence, amplitude_bits: int, phase_samples: int,
 
 
 def main():
-    # ---------- USER PARAMETERS (edit these) ----------
+    # ----------PARAMETERS----------
     # Example electrodes from the docs
     electrodes = [4885, 4666, 4886, 4022, 5327, 5328, 5106, 5326, 3138, 3140, 3580, 4887]
     stim_electrodes = [3580, 4887]
 
-    wells = [0]                     # use well 0
+    wells = [0]                     # use well 0 (DONT CHANGE THIS FOR MAXONE)
     directory_name = "/tmp"         # CHANGE THIS to an existing folder on the rig
-    file_name = "maxlab_simple_test"
+    file_name = "maxlab_test"
 
     number_pulses_per_train = 10
     number_pulse_trains = 3
